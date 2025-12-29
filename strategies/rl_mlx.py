@@ -279,15 +279,15 @@ class RLStrategy(Strategy):
 
             for start in range(0, n_samples, self.batch_size):
                 end = min(start + self.batch_size, n_samples)
-                batch_idx = indices[start:end]
+                batch_idx = mx.array(indices[start:end].astype(np.int32))
 
-                # Get batch
-                batch_states = states_mx[batch_idx]
-                batch_actions = actions_mx[batch_idx]
-                batch_old_log_probs = old_log_probs_mx[batch_idx]
-                batch_advantages = advantages_mx[batch_idx]
-                batch_returns = returns_mx[batch_idx]
-                batch_old_values = old_values_mx[batch_idx]
+                # Get batch using mx.take (MLX doesn't support numpy fancy indexing)
+                batch_states = mx.take(states_mx, batch_idx, axis=0)
+                batch_actions = mx.take(actions_mx, batch_idx, axis=0)
+                batch_old_log_probs = mx.take(old_log_probs_mx, batch_idx, axis=0)
+                batch_advantages = mx.take(advantages_mx, batch_idx, axis=0)
+                batch_returns = mx.take(returns_mx, batch_idx, axis=0)
+                batch_old_values = mx.take(old_values_mx, batch_idx, axis=0)
 
                 # Define loss function for actor (takes model, not params)
                 def actor_loss_fn(model):
