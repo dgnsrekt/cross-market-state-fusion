@@ -25,7 +25,9 @@ PPO agent trading 4 concurrent 15-minute binary prediction markets (BTC, ETH, SO
 | Phase | Update | Entropy | PnL | Trades | Win Rate |
 |-------|--------|---------|-----|--------|----------|
 | 1 | 36 | 0.36 | $3.90 | 1545 | 20.2% |
-| 2 | 60 | 1.03 | $8.50 | 2116 | 21.5% |
+| 2 | 36 | 1.04 | $9.78 | 2914 | 21.4% |
+
+**Context**: $10 base capital, 50% position sizing ($5/trade). Phase 2 PnL of $9.78 = **98% ROI** on base capital.
 
 **Key insight**: Win rate ~21% but profitable due to asymmetric payoffs - winners pay more than losers cost.
 

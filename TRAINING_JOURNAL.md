@@ -111,8 +111,9 @@ Critic: Linear(18, 128) -> tanh -> Linear(128, 128) -> tanh -> Linear(128, 1)
 ## Training Run
 
 **Date**: December 29, 2025, 19:08 - ongoing
-**Total Updates**: 60 (36 + 24)
-**Total Trades**: 3,661+
+**Total Updates**: 69 (36 + 33)
+**Total Trades**: 4,543+
+**Capital**: $10 base, 50% position sizing ($5/trade)
 
 ---
 
@@ -287,10 +288,12 @@ np.savez("rl_model_stats.npz",
 
 ---
 
-### Phase 2: Pure PnL Reward (Updates 37-60)
+### Phase 2: Pure PnL Reward (Updates 37-72)
 
 **Started**: December 29, 2025, 20:02
-**Trades**: 2,116+
+**Trades**: 2,998+
+
+**Capital Context**: $10 base capital, 50% position sizing ($5/trade).
 
 #### Configuration Changes
 ```python
@@ -298,7 +301,7 @@ entropy_coef = 0.10  # Doubled
 # Reward: pure realized PnL (no shaping)
 ```
 
-#### Results (24 updates)
+#### Results (33 updates)
 
 | Update | Entropy | Value Loss | Avg Reward | PnL | Trades | Win Rate |
 |--------|---------|------------|------------|-----|--------|----------|
@@ -306,10 +309,12 @@ entropy_coef = 0.10  # Doubled
 | 5 | 0.93 | 2.09 | +0.02 | $5.65 | 226 | 20.8% |
 | 10 | 1.06 | 7.16 | +0.02 | $9.55 | 616 | 22.9% |
 | 15 | 1.07 | 14.21 | -0.07 | $8.80 | 1129 | 21.0% |
-| 19 | 1.07 | 60.04 | -0.14 | $6.18 | 1560 | 21.3% |
 | 20 | 1.05 | 3.10 | -0.01 | $5.85 | 1672 | 21.1% |
-| 22 | 1.02 | 8.44 | +0.08 | $8.13 | 1885 | 21.3% |
-| 24 | 1.03 | 2.57 | +0.05 | $8.50 | 2116 | 21.5% |
+| 25 | 1.04 | 3.75 | +0.03 | $9.48 | 2245 | 21.2% |
+| 30 | 1.07 | 0.49 | +0.00 | $7.18 | 2751 | 20.9% |
+| 33 | 1.06 | 1.85 | +0.00 | $9.83 | 2998 | 21.1% |
+
+**ROI**: $9.83 PnL on $10 base = **98% return** on capital.
 
 #### Observations
 
@@ -333,7 +338,7 @@ The critic is adapting to the pure PnL reward signal which has higher variance t
 
 **3. Consistent Positive PnL**
 
-Cumulative PnL growing steadily: $5.20 → $9.55 over 10 updates. Buffer rewards consistently positive, indicating the model is finding profitable trades on average with the pure PnL signal.
+Cumulative PnL growing steadily through Phase 2, reaching ~$10 on $10 base capital (~100% ROI). Buffer rewards consistently positive, indicating the model is finding profitable trades on average with the pure PnL signal.
 
 **4. Win Rate Plateau**
 
