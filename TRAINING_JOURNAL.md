@@ -1,50 +1,51 @@
 # Training Journal: RL on Polymarket
 
-This documents training a PPO agent to trade 15-minute binary prediction markets. The experiment ran on December 29, 2025 over ~2 hours of live market data.
+Training a PPO agent to trade 15-minute binary prediction markets. This documents what worked, what didn't, and what it means.
 
 ---
 
 ## The Experiment
 
-**Goal**: Can an RL agent learn to predict short-term crypto price direction by observing cross-exchange data?
+**Question**: Can an RL agent learn profitable trading patterns from sparse binary outcomes?
 
-**Setup**:
-- 4 concurrent markets (BTC, ETH, SOL, XRP)
-- 15-minute binary outcomes (UP or DOWN)
-- Live data from Binance + Polymarket
-- Paper trading with $10 base capital
+**Setup**: Paper trade 4 concurrent crypto markets (BTC, ETH, SOL, XRP) on Polymarket using live data from Binance + Polymarket orderbooks. $10 base capital, 50% position sizing.
 
-**Result**: 109% ROI over 72 PPO updates, but with important caveats about what this proves.
+**Result**: 109% ROI over 72 PPO updates (~2 hours). But the path there was interesting.
 
 ---
 
-## Why This Market?
+## Why This Market is Interesting
 
-Polymarket's 15-minute crypto markets have interesting properties:
+### Concurrent Multi-Asset Trading
 
-1. **Binary resolution** - Market pays $1 or $0 based on whether price went up. No partial outcomes.
+Unlike typical RL trading that focuses on one asset, this agent trades 4 markets simultaneously with a single shared policy. Every 15-minute window spawns 4 independent binary markets. The agent must:
+- Allocate attention across all active markets
+- Learn asset-specific patterns while sharing weights
+- Handle asynchronous expirations and refreshes
 
-2. **Known end time** - Unlike continuous trading, you know exactly when resolution happens. Changes the decision problem.
+The same neural network decides for all assets - learning generalizable crypto patterns rather than overfitting to one market.
 
-3. **Cross-exchange lag** - Polymarket orderbook lags Binance by seconds. If you see Binance move, you can sometimes bet on Polymarket before the book adjusts.
+### Unique Market Structure
 
-4. **Sparse reward** - You only learn if you were right at resolution. No intermediate feedback during the 15-minute window.
+Polymarket's 15-minute crypto markets are unusual:
+- **Binary outcome**: Pays $1 or $0 based on price direction. No partial outcomes.
+- **Known resolution time**: You know exactly when the market closes. Changes the decision calculus.
+- **Orderbook-based**: Real CLOB with bid/ask spreads, not an AMM.
+- **Cross-exchange lag**: Polymarket prices lag Binance by seconds. Exploitable.
 
-This creates a clean RL problem: observe state, take action, wait for binary outcome.
+This creates arbitrage opportunities - observe Binance move, bet on Polymarket before the orderbook adjusts.
 
----
+### Multi-Source Data Fusion
 
-## Data Fusion
-
-The agent combines three data streams:
+The agent fuses three real-time streams:
 
 ```
-Binance Spot WSS     → Price returns (1m, 5m, 10m)
-Binance Futures WSS  → Order flow, CVD, large trades
+Binance Spot WSS     → Price returns (1m, 5m, 10m), volatility
+Binance Futures WSS  → Order flow, CVD, liquidations, large trades
 Polymarket CLOB WSS  → Bid/ask spread, orderbook imbalance
 ```
 
-This creates an 18-dimensional state:
+This creates an 18-dimensional state that captures both underlying asset dynamics AND prediction market microstructure:
 
 | Category | Features |
 |----------|----------|
@@ -55,32 +56,34 @@ This creates an 18-dimensional state:
 | Position | Has position, side, PnL, time remaining |
 | Regime | Vol regime, trend regime |
 
-The hypothesis: combining underlying asset dynamics (Binance) with prediction market microstructure (Polymarket) gives exploitable signal.
+### Sparse Reward Challenge
+
+Unlike continuous markets where PnL accrues gradually, binary markets only pay at resolution:
+- Enter at prob=0.55
+- Wait up to 15 minutes
+- Get +$0.45 if right, -$0.55 if wrong
+- No intermediate feedback
+
+Credit assignment is hard. The agent must learn which early signals predict outcomes 15 minutes later.
 
 ---
 
 ## Training: Two Phases
 
-### Phase 1: Shaped Rewards (Failed)
+### Phase 1: Shaped Rewards (Updates 1-36)
 
-**Updates**: 1-36
-**Duration**: ~52 minutes
-**Trades**: 1,545
+**Duration**: ~52 minutes | **Trades**: 1,545
 
-Started with a reward function that included shaping bonuses:
+Started with a reward function that tried to guide learning:
 
 ```python
 reward = pnl_delta * 0.1           # Actual PnL (scaled down)
-reward -= 0.001                    # Transaction cost
+reward -= 0.001                    # Transaction cost penalty
 reward += 0.002 * momentum_aligned # Bonus for trading with momentum
 reward += 0.001 * size_multiplier  # Bonus for larger positions
 ```
 
-**What happened**: Entropy collapsed from 1.09 to 0.36. The policy became nearly deterministic, fixating on a single action.
-
-**Why it failed**: The shaping rewards were similar magnitude to the actual PnL signal. The agent learned to collect bonuses (trade with momentum, use large sizes) without actually being profitable. Buffer win rate showed 90%+ but actual trade win rate was 20%.
-
-**Lesson**: Shaping rewards can backfire when they're gameable. The agent optimized the reward function, not the underlying goal.
+**What happened**: Entropy collapsed from 1.09 → 0.36. The policy became nearly deterministic, fixating on a single action pattern.
 
 | Update | Entropy | PnL | Win Rate |
 |--------|---------|-----|----------|
@@ -89,22 +92,43 @@ reward += 0.001 * size_multiplier  # Bonus for larger positions
 | 20 | 0.40 | $1.37 | 19.4% |
 | 36 | 0.36 | $3.90 | 20.2% |
 
-### Phase 2: Pure PnL (Worked)
+**Why it failed**: The shaping rewards were similar magnitude to actual PnL. With typical PnL deltas of $0.01-0.05, the scaled signal was 0.001-0.005 - same as the bonuses.
 
-**Updates**: 37-72
-**Duration**: ~52 minutes
-**Trades**: 3,330
+The agent learned to game the reward function:
+- Trade with momentum → collect +0.002 bonus
+- Use large sizes → collect +0.001 bonus
+- Actual profitability? Optional.
 
-Switched to pure realized PnL:
+Buffer win rate showed 90%+ (counting bonus-positive experiences) while actual trade win rate was 20%. The agent was optimizing the reward function, not the underlying goal.
+
+### Diagnosis: Reward Shaping Backfired
+
+The divergence between buffer win rate (what the agent optimized) and cumulative win rate (what we cared about) revealed the problem:
+
+- **Buffer win rate**: % of experiences with reward > 0 (includes shaping bonuses)
+- **Cumulative win rate**: % of closed trades that were profitable
+
+When these diverge, the agent is learning the wrong thing.
+
+---
+
+### Phase 2: Pure PnL (Updates 37-72)
+
+**Duration**: ~52 minutes | **Trades**: 3,330
+
+Switched to pure realized PnL on position close:
 
 ```python
 def reward(position_close):
     return (exit_price - entry_price) * size  # That's it
 ```
 
-Also doubled entropy coefficient (0.05 → 0.10) to prevent collapse.
+Also:
+- Doubled entropy coefficient (0.05 → 0.10)
+- Simplified action space (7 → 3 actions)
+- Reset reward normalization stats
 
-**What happened**: Entropy recovered to 1.05 (near maximum for 3 actions). PnL grew steadily to $10.93, representing 109% ROI on the $10 base.
+**What happened**: Entropy recovered to 1.05 (near maximum for 3 actions). PnL grew steadily.
 
 | Update | Entropy | PnL | Win Rate |
 |--------|---------|-----|----------|
@@ -113,11 +137,21 @@ Also doubled entropy coefficient (0.05 → 0.10) to prevent collapse.
 | 20 | 1.05 | $5.85 | 21.1% |
 | 36 | 1.05 | $10.93 | 21.2% |
 
-**Observation**: Win rate settled at ~21%, below random (33%). But the agent is profitable because binary markets have asymmetric payoffs. When you buy at prob=0.40, a win pays $0.60 and a loss costs $0.40.
+**Final**: $10.93 PnL on $10 base = **109% ROI**
+
+### The Win Rate Paradox
+
+Win rate settled at ~21%, well below random (33%). But the agent is profitable.
+
+Why? Binary markets have asymmetric payoffs. When you buy an UP token at probability 0.40:
+- Win: pay $0.40, receive $1.00 → profit $0.60
+- Lose: pay $0.40, receive $0.00 → loss $0.40
+
+You can win 40% of the time and break even. Win 21% of the time but pick your spots at low probabilities? Still profitable.
 
 ---
 
-## What Changed
+## What Changed Between Phases
 
 | Aspect | Phase 1 | Phase 2 |
 |--------|---------|---------|
@@ -127,19 +161,21 @@ Also doubled entropy coefficient (0.05 → 0.10) to prevent collapse.
 | Final entropy | 0.36 (collapsed) | 1.05 (healthy) |
 | Final PnL | $3.90 | $10.93 |
 
-Key changes:
+**Key changes**:
 
-1. **Removed shaping rewards** - No more momentum bonuses or sizing bonuses. Just pay the agent when it makes money.
+1. **Removed shaping rewards** - No more gameable bonuses. Sparse but honest signal.
 
-2. **Doubled entropy coefficient** - Stronger incentive to explore. Prevented the policy from collapsing to a single action.
+2. **Doubled entropy coefficient** - Stronger exploration incentive. Prevented policy collapse.
 
-3. **Simplified action space** - Reduced from 7 actions (HOLD + 3 buy sizes + 3 sell sizes) to 3 actions (HOLD, BUY, SELL). Let the model learn when to trade before learning how much.
+3. **Simplified action space** - Reduced from 7 actions (HOLD + 3 buy sizes + 3 sell sizes) to 3 (HOLD, BUY, SELL). Let the model learn *when* to trade before learning *how much*.
+
+4. **Reset reward normalization** - Old running stats were calibrated to shaped rewards (mean≈-0.002, std≈0.01). Pure PnL has different distribution.
 
 ---
 
-## Technical Implementation
+## Technical Details
 
-### PPO with MLX
+### PPO Implementation (MLX)
 
 ```python
 # GAE advantage estimation
@@ -161,6 +197,13 @@ entropy = -(probs * log(probs)).sum(-1).mean()
 loss = policy_loss + 0.5 * value_loss - 0.10 * entropy
 ```
 
+### Network Architecture
+
+```
+Actor:  18 → 128 (tanh) → 128 (tanh) → 3 (softmax)
+Critic: 18 → 128 (tanh) → 128 (tanh) → 1
+```
+
 ### Hyperparameters
 
 | Parameter | Value |
@@ -175,29 +218,39 @@ loss = policy_loss + 0.5 * value_loss - 0.10 * entropy
 | Clip epsilon | 0.2 |
 | Entropy coef | 0.10 |
 
+### Value Loss Spikes
+
+Phase 2 showed value loss spikes as the critic adapted to pure PnL:
+- Update 1: 149.5 (reward scale change)
+- Update 7: 69.95 (large reward variance)
+- Updates 8-9: 18-20 (stabilizing)
+- Update 10: 7.16 (settled)
+
+The critic learned to predict a noisier, more meaningful signal.
+
 ---
 
 ## What This Proves
 
-1. **RL can learn from sparse binary rewards** - The agent improved despite only getting feedback every 15 minutes at market resolution.
+1. **RL learns from sparse realized PnL** - The agent only gets reward when positions close (at market resolution). No intermediate feedback. Despite this sparsity, it found profitable patterns.
 
-2. **Pure PnL > shaped rewards** - Shaping was gameable. Sparse but honest signal worked better.
+2. **Reward shaping can backfire** - When shaping rewards are gameable and similar magnitude to the real signal, agents optimize the wrong thing. Sparse but honest > dense but noisy.
 
-3. **Entropy coefficient matters** - 0.05 caused collapse; 0.10 maintained exploration.
+3. **Entropy coefficient matters** - 0.05 caused policy collapse; 0.10 maintained healthy exploration. Small hyperparameter, big impact.
 
-4. **Low win rate can be profitable** - 21% wins, 109% ROI. Asymmetric payoffs change the math.
+4. **Low win rate can be profitable** - 21% wins, 109% ROI. Asymmetric payoffs change the math entirely.
 
-5. **Multi-source fusion provides signal** - Combining Binance and Polymarket data gave the agent something to learn from.
+5. **Multi-source fusion provides signal** - Combining Binance price/flow data with Polymarket orderbook state gave the agent something learnable.
 
 ## What This Doesn't Prove
 
-1. **Live edge** - Paper trading ignores latency, slippage, fees, and market impact. Real performance would be worse.
+1. **Live profitability** - Paper trading assumes instant fills at mid-price. Real trading faces latency (50-200ms), slippage, fees, and market impact. Expect 20-50% degradation.
 
-2. **Statistical significance** - 2 hours isn't enough. Could be variance. Need weeks of out-of-sample testing.
+2. **Statistical significance** - 72 updates over 2 hours isn't enough to confirm edge. Could be variance. Needs weeks of out-of-sample testing.
 
-3. **Scalability** - $5 positions are invisible. At size, the agent's orders would move the market.
+3. **Scalability** - $5 positions are invisible to the market. At $100+, the agent's orders would move prices and consume liquidity.
 
-4. **Durability** - If this edge exists, it will get arbitraged away as others exploit it.
+4. **Durability** - Markets adapt. If this edge exists, others will find and arbitrage it away.
 
 ---
 
